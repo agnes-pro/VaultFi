@@ -87,3 +87,97 @@
     ratio
   )
 )
+
+;; Calculate compound interest based on block height
+(define-private (calculate-interest
+    (principal uint)
+    (rate uint)
+    (blocks uint)
+  )
+  (let (
+      (interest-per-block (/ (* principal rate) (* u100 u144))) ;; Daily interest / blocks per day
+      (total-interest (* interest-per-block blocks))
+    )
+    total-interest
+  )
+)
+
+;; Automated liquidation check and execution
+(define-private (check-liquidation (loan-id uint))
+  (let (
+      (loan (unwrap! (map-get? loans { loan-id: loan-id }) ERR-LOAN-NOT-FOUND))
+      (btc-price (unwrap! (get price (map-get? collateral-prices { asset: "BTC" }))
+        ERR-NOT-INITIALIZED
+      ))
+      (current-ratio (calculate-collateral-ratio (get collateral-amount loan)
+        (get loan-amount loan) btc-price
+      ))
+    )
+    (if (<= current-ratio (var-get liquidation-threshold))
+      (liquidate-position loan-id)
+      (ok true)
+    )
+  )
+)
+
+;; Execute liquidation procedure
+(define-private (liquidate-position (loan-id uint))
+  (let (
+      (loan (unwrap! (map-get? loans { loan-id: loan-id }) ERR-LOAN-NOT-FOUND))
+      (borrower (get borrower loan))
+    )
+    (begin
+      (map-set loans { loan-id: loan-id } (merge loan { status: "liquidated" }))
+      (map-delete user-loans { user: borrower })
+      (ok true)
+    )
+  )
+)
+
+;; Validate loan ID range and existence
+(define-private (validate-loan-id (loan-id uint))
+  (and
+    (> loan-id u0)
+    (<= loan-id (var-get total-loans-issued))
+  )
+)
+
+;; Validate supported asset types
+(define-private (is-valid-asset (asset (string-ascii 3)))
+  (is-some (index-of VALID-ASSETS asset))
+)
+
+;; Validate price feed data integrity
+(define-private (is-valid-price (price uint))
+  (and
+    (> price u0)
+    (<= price u1000000000000) ;; Reasonable upper bound for asset prices
+  )
+)
+
+;; Helper function for loan filtering
+(define-private (not-equal-loan-id (id uint))
+  (not (is-eq id id))
+)
+
+;; CORE PUBLIC FUNCTIONS
+
+;; Initialize the VaultFi lending platform
+(define-public (initialize-platform)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (not (var-get platform-initialized)) ERR-ALREADY-INITIALIZED)
+    (var-set platform-initialized true)
+    (ok true)
+  )
+)
+
+;; Deposit Bitcoin collateral into the vault
+(define-public (deposit-collateral (amount uint))
+  (begin
+    (asserts! (var-get platform-initialized) ERR-NOT-INITIALIZED)
+    (asserts! (> amount u0) ERR-INVALID-AMOUNT)
+    (var-set total-btc-locked (+ (var-get total-btc-locked) amount))
+    (ok true)
+  )
+)
